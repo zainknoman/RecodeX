@@ -42,22 +42,22 @@ No backend. No uploads. Everything runs locally in your browser.
 > Replace these paths with actual screenshots in your repo (`/screenshots` folder recommended)
 
 ### 📌 Main Interface
-![Main UI](./screenshots/01-main.png)
+![Main UI](../screenshots/01-main.png)
 
 ### 📂 File Upload & List View
-![File List](./screenshots/02-uploadfiles.png)
+![File List](../screenshots/02-uploadfiles.png)
 
 ### 🧠 Compiled Output Viewer
-![Compiled Viewer](./screenshots/03-compile-view.png)
+![Compiled Viewer](../screenshots/03-compile-view.png)
 
 ### 🔎 Download All Files Into a Single Text File
-![Search Highlight](./screenshots/04-download-compiled.png)
+![Search Highlight](../screenshots/04-download-compiled.png)
 
 ### 🔄 Reverse Split File Upload
-![Reverse Split](./screenshots/05-upload-compiledfile-to-split-original-files.png)
+![Reverse Split](../screenshots/05-upload-compiledfile-to-split-original-files.png)
 
 ### 🔄 Reverse Split Output
-![Reverse Split](./screenshots/06-split-download-zip.png)
+![Reverse Split](../screenshots/06-split-download-zip.png)
 
 ---
 
