@@ -1,0 +1,553 @@
+<!--
+Reverse-Engineered Documentation (Spec Sheet)
+
+Title: File Combiner & Compiler — Enhanced (with Reverse Split)
+Purpose: Client-side utility to upload/drag-and-drop multiple text/code files, concatenate their contents, view, search, copy, download the compiled result, and *reverse* the compiled file back into original individual files.
+
+Stack: HTML5, Tailwind CSS (CDN), Vanilla JS (ES6), JSZip (CDN)
+
+Features:
+- Drag & drop or click-to-select multiple files (.js, .vue, .txt, .html, .css, .json, .ts, .tsx, .jsx, .md)
+- File listing with name, size and remove action
+- Compile files (wrap each with start/end comment markers) and produce a single compiled text
+- View compiled output in modal with copy-to-clipboard and download
+- Search inside compiled output with highlight and navigation to first match
+- Download ZIP containing original files + compiled_output.txt (uses JSZip)
+- **Reverse Split:** Upload a compiled consolidated file and split it back into the original individual files; download as ZIP or individually.
+- Accessibility: focus management for modal, keyboard search trigger
+
+Limitations & Notes:
+- Runs entirely in the browser (no backend)
+- Binary files not supported
+- JSZip is used for ZIP export
+- Syntax highlighting is not included (can be added with highlight.js)
+
+Developer Hints:
+- compiledRawContent stores the current compiled string
+- readFileContent(file) returns a Promise that reads file as text
+- compileFiles(showModal=true) reads selectedFiles and constructs compiled output
+- downloadZipButton triggers JSZip packaging and download
+- reverseSplitCompiled(text) parses markers and returns array of { filename, content }
+
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>File Combiner & Compiler — Enhanced (Reverse Split)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 0; background-color: #f4f7f6; color: #333; box-sizing: border-box; }
+        .main-content-wrapper { display: flex; justify-content: center; align-items: flex-start; min-height: calc(100vh - 64px); padding: 20px; }
+        .container { max-width: 1000px; margin: 30px auto; background-color: #fff; padding: 30px; border-radius: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); width: 100%; }
+        h1 { color: #2c3e50; text-align: center; margin-bottom: 18px; }
+        #drop-area { border: 2px dashed #95a5a6; border-radius: 10px; padding: 30px; text-align: center; cursor: pointer; margin-bottom: 18px; background-color: #ecf0f1; transition: all 0.2s ease-in-out; }
+        #drop-area.highlight { border-color: #3498db; background-color: #e8f0f3; box-shadow: 0 0 10px rgba(52,152,219,0.3); }
+        #drop-area p { font-size: 1.05em; color: #7f8c8d; margin: 0; }
+        #fileInput { display: none; }
+        #fileList { min-height: 80px; max-height: 260px; overflow-y: auto; border: 1px solid #e6e6e6; border-radius: 6px; padding: 10px; background-color: #ffffff; }
+        .file-item { display:flex; justify-content:space-between; align-items:center; padding:6px 0; border-bottom:1px dashed #eee; font-size:0.95em; }
+        .file-item:last-child { border-bottom:none; }
+        .file-name { font-weight:600; color:#2c3e50; }
+        .file-size { color:#7f8c8d; font-size:0.9em; }
+        button { display:block; width:100%; padding:12px 18px; background-color:#28a745; color:white; border:none; border-radius:6px; cursor:pointer; margin-top:18px; font-size:1.05em; transition:background-color .15s ease; }
+        button:hover { background-color:#218838; }
+        button:disabled { background-color:#cccccc; cursor:not-allowed; }
+        #status { margin-top:14px; padding:8px; border-radius:6px; font-weight:600; text-align:center; }
+        .status-info { background-color:#e0f7fa; color:#007bff; }
+        .status-success { background-color:#d4edda; color:#28a745; }
+        .status-error { background-color:#f8d7da; color:#dc3545; }
+        .modal-overlay { position:fixed; top:0; left:0; width:100%; height:100%; background-color:rgba(0,0,0,0.6); display:flex; justify-content:center; align-items:center; z-index:1000; opacity:0; visibility:hidden; transition:opacity .25s, visibility .25s; }
+        .modal-overlay.visible { opacity:1; visibility:visible; }
+        .modal-content { background:#fff; padding:20px; border-radius:8px; box-shadow:0 6px 20px rgba(0,0,0,0.2); width:90%; max-width:900px; transform:translateY(-16px); transition:transform .25s; }
+        .modal-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; }
+        .copy-button, .close-button, .zip-button { padding:8px 12px; border:none; border-radius:6px; cursor:pointer; font-weight:600; }
+        .copy-button { background:#007bff; color:white; }
+        .zip-button { background:#6f42c1; color:white; margin-left:8px; }
+        .close-button { background:#dc3545; color:white; width:100%; margin-top:12px; }
+        #compiledText { width:100%; height:380px; padding:12px; font-family:monospace; font-size:0.92em; border:1px solid #ddd; border-radius:6px; background:#f7f7f7; white-space:pre-wrap; overflow:auto; }
+        .hidden { display:none; }
+        #smallCompileButton { display:inline-flex; align-items:center; padding:8px 14px; font-size:1em; background-color:#3498db; color:white; border-radius:6px; border:none; cursor:pointer; }
+        #controls { display:flex; gap:12px; flex-wrap:wrap; }
+        mark { background:#ffe58f; padding:0 2px; border-radius:2px; }
+        .split-section { margin-top:22px; border-top:1px solid #eee; padding-top:18px; }
+        .extracted-list { max-height:240px; overflow:auto; border:1px solid #eee; border-radius:6px; padding:10px; background:#fafafa; }
+		.footer {position: fixed;bottom: 0;left: 0;width: 100%;text-align: center;background: #f8f9fa;padding: 10px;border-top: 1px solid #ddd;font-size: 14px;color: #555;}
+
+    </style>
+</head>
+<body>
+<!--
+    <header class="bg-blue-800 text-white p-3 shadow-md">
+        <nav class="mx-auto flex justify-between items-center px-4 max-w-6xl">
+            <div class="text-xl font-bold">My File Tools</div>
+            <ul class="flex space-x-4 text-sm">
+                <li><a href="#" class="hover:text-blue-200">File Text Search</a></li>
+                <li><a href="#" class="hover:text-blue-200">File Combiner</a></li>
+                <li><a href="#" class="hover:text-blue-200">T24 Log MultiFile</a></li>
+            </ul>
+        </nav>
+    </header>
+-->
+	<header class="bg-gray-900 text-white shadow-lg">
+	  <div class="max-w-7xl mx-auto px-6 py-6 flex flex-col md:flex-row items-center justify-between">
+		
+		<!-- Logo & Title -->
+		<div class="flex items-center space-x-3">
+		  <!-- Simple cube logo -->
+		  <div class="w-10 h-10 bg-gradient-to-br from-blue-500 to-purple-600 rounded-lg flex items-center justify-center font-bold text-lg">
+			R
+		  </div>
+		  <div>
+			<h1 class="text-2xl font-extrabold">ReCodeX</h1>
+			<p class="text-sm text-gray-400">Combine. Extract. Reuse.</p>
+		  </div>
+		</div>
+		
+		<!-- Action Buttons -->
+		<div class="mt-6 md:mt-0 flex space-x-4">
+		  <button class="px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 transition font-medium">
+			Combine Files
+		  </button>
+		  <button class="px-5 py-2 rounded-xl bg-green-600 hover:bg-green-700 transition font-medium">
+			Extract Files
+		  </button>
+		</div>
+	  </div>
+
+	  <!-- Sub descriptions -->
+	  <div class="max-w-4xl mx-auto px-6 pb-6 text-center">
+		<p class="text-gray-300 text-sm">
+		  <span class="font-semibold">Combine →</span> Merge multiple files into one structured output file.
+		</p>
+		<p class="text-gray-300 text-sm mt-1">
+		  <span class="font-semibold">Extract →</span> Split a combined file back into its original parts, with search, copy, and zip download options.
+		</p>
+	  </div>
+	</header>
+
+    <div class="main-content-wrapper">
+        <div class="container">
+            <h1 class="text-3xl font-bold text-gray-800 mb-2">Combine & Compile Text Files — Enhanced (Reverse Split)</h1>
+            <div id="messageBox" class="mb-3">
+                <p class="font-semibold">Important Note:</p>
+                <p class="text-sm text-gray-600">This utility combines data from multiple text/code files into a single consolidated output. Everything runs in your browser — no files are uploaded to any server. You can also reverse this process: upload a previously compiled consolidated file and split it back into individual files.</p>
+            </div>
+
+            <div id="drop-area" aria-label="Drop files here">
+                <p>Drag & Drop files here (to compile)</p>
+                <p>or click to select files</p>
+                <input type="file" id="fileInput" multiple accept=".js,.vue,.txt,.html,.css,.json,.ts,.tsx,.jsx,.md" />
+            </div>
+
+            <div class="flex items-center justify-between mb-2" id="controls">
+                <button id="smallCompileButton" type="button">&#9658; Compile</button>
+                <button id="compileAndDownload" type="button" class="w-auto px-4 py-2 bg-green-600">Compile & View Consolidated File</button>
+                <button id="downloadZip" class="zip-button hidden" title="Download ZIP of originals + compiled">Download ZIP (All + Compiled)</button>
+                <a id="downloadLink" class="hidden" download="compiled_output.txt">Download Compiled File</a>
+            </div>
+
+            <h2 class="text-lg font-semibold mt-2">Uploaded Files:</h2>
+            <div id="fileList">No files selected.</div>
+
+            <div id="status" class="mt-3"></div>
+
+            <!-- Reverse Split Section -->
+            <div class="split-section">
+                <h2 class="text-lg font-semibold">Reverse: Split a Compiled File</h2>
+                <p class="text-sm text-gray-600">Upload a consolidated compiled file (the one produced by this tool) to extract original files.</p>
+                <div class="mt-3 flex gap-2">
+                    <input type="file" id="compiledFileInput" accept=".txt,.log,.md,.js,.json,.html,.css" />
+                    <button id="splitButton" class="px-4 py-2 bg-orange-500 text-white rounded">Split Consolidated File</button>
+                    <button id="downloadExtractedZip" class="zip-button hidden">Download Extracted ZIP</button>
+                </div>
+
+                <div id="extractedFilesContainer" class="mt-3 hidden">
+                    <h3 class="font-semibold">Extracted Files</h3>
+                    <div class="extracted-list" id="extractedList"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal -->
+    <div id="compiledContentModal" class="modal-overlay" role="dialog" aria-modal="true" aria-hidden="true">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 class="text-xl font-bold">Compiled File Content</h3>
+                <div class="inline-flex items-center">
+                    <button id="copyContentButton" class="copy-button" title="Copy compiled content">Copy</button>
+                    <button id="downloadCompiledBtn" class="zip-button ml-2" title="Download compiled output">Download</button>
+                </div>
+            </div>
+
+            <div class="mb-2 flex gap-2">
+                <input id="searchInput" type="text" placeholder="Search inside compiled content (press Enter or click Search)" class="flex-1 border rounded px-2 py-1" />
+                <button id="searchButton" class="px-3 py-1 bg-indigo-600 text-white rounded">Search</button>
+                <button id="clearSearch" class="px-3 py-1 bg-gray-300 rounded">Clear</button>
+            </div>
+
+            <pre id="compiledText" tabindex="0"></pre>
+
+            <button id="closeModalButton" class="close-button">Close</button>
+        </div>
+    </div>
+
+  <footer class="footer">© 2025 ZainKamali – ReCodeX</footer>
+
+    <script>
+        // Elements
+        const fileInput = document.getElementById('fileInput');
+        const dropArea = document.getElementById('drop-area');
+        const fileListDiv = document.getElementById('fileList');
+        const compileButton = document.getElementById('compileAndDownload');
+        const smallCompileButton = document.getElementById('smallCompileButton');
+        const statusDiv = document.getElementById('status');
+        const downloadLink = document.getElementById('downloadLink');
+        const downloadZipButton = document.getElementById('downloadZip');
+
+        // Reverse split elements
+        const compiledFileInput = document.getElementById('compiledFileInput');
+        const splitButton = document.getElementById('splitButton');
+        const downloadExtractedZip = document.getElementById('downloadExtractedZip');
+        const extractedFilesContainer = document.getElementById('extractedFilesContainer');
+        const extractedList = document.getElementById('extractedList');
+
+        // Modal elements
+        const modalOverlay = document.getElementById('compiledContentModal');
+        const compiledTextPre = document.getElementById('compiledText');
+        const copyContentButton = document.getElementById('copyContentButton');
+        const closeModalButton = document.getElementById('closeModalButton');
+        const downloadCompiledBtn = document.getElementById('downloadCompiledBtn');
+
+        // Search elements
+        const searchInput = document.getElementById('searchInput');
+        const searchButton = document.getElementById('searchButton');
+        const clearSearch = document.getElementById('clearSearch');
+
+        let selectedFiles = [];
+        let compiledRawContent = '';
+        let lastExtracted = [];
+
+        // --- File selection & drag/drop ---
+        dropArea.addEventListener('click', () => fileInput.click());
+        fileInput.addEventListener('change', e => handleFiles(e.target.files));
+
+        ['dragenter','dragover','dragleave','drop'].forEach(evt => dropArea.addEventListener(evt, preventDefaults, false));
+        function preventDefaults(e){ e.preventDefault(); e.stopPropagation(); }
+
+        ['dragenter','dragover'].forEach(evt => dropArea.addEventListener(evt, () => dropArea.classList.add('highlight'), false));
+        ['dragleave','drop'].forEach(evt => dropArea.addEventListener(evt, () => dropArea.classList.remove('highlight'), false));
+
+        dropArea.addEventListener('drop', (e) => {
+            const dt = e.dataTransfer;
+            if (dt && dt.files) handleFiles(dt.files);
+        }, false);
+
+        function handleFiles(files){
+            selectedFiles = Array.from(files);
+            displayFiles();
+            resetStatus();
+        }
+
+        function displayFiles(){
+            if (!selectedFiles || selectedFiles.length === 0){
+                fileListDiv.textContent = 'No files selected.';
+                compileButton.disabled = true;
+                smallCompileButton.disabled = true;
+                downloadZipButton.classList.add('hidden');
+                return;
+            }
+
+            fileListDiv.innerHTML = '';
+            selectedFiles.forEach(f => {
+                const div = document.createElement('div'); div.className = 'file-item';
+                const left = document.createElement('div');
+                left.style.display = 'flex'; left.style.flexDirection = 'column';
+                const name = document.createElement('span'); name.className = 'file-name'; name.textContent = f.name;
+                const size = document.createElement('span'); size.className = 'file-size'; size.textContent = `(${(f.size/1024).toFixed(2)} KB)`;
+                left.appendChild(name); left.appendChild(size);
+                div.appendChild(left);
+
+                const right = document.createElement('div');
+                const removeBtn = document.createElement('button');
+                removeBtn.textContent = 'Remove';
+                removeBtn.className = 'px-2 py-1 text-sm bg-red-500 text-white rounded';
+                removeBtn.addEventListener('click', () => {
+                    selectedFiles = selectedFiles.filter(x => x !== f);
+                    displayFiles();
+                });
+                right.appendChild(removeBtn);
+                div.appendChild(right);
+                fileListDiv.appendChild(div);
+            });
+
+            compileButton.disabled = false;
+            smallCompileButton.disabled = false;
+            downloadZipButton.classList.remove('hidden');
+        }
+
+        function resetStatus(){ statusDiv.textContent = ''; statusDiv.className = ''; downloadLink.classList.add('hidden'); }
+        function updateStatus(msg, type='info'){ statusDiv.textContent = msg; statusDiv.className = (type==='info'?'status-info':(type==='success'?'status-success':'status-error')); }
+
+        // --- Modal functions ---
+        function openModal(content){
+            compiledRawContent = content;
+            compiledTextPre.innerHTML = escapeHtml(content);
+            modalOverlay.classList.add('visible');
+            modalOverlay.setAttribute('aria-hidden', 'false');
+            setTimeout(() => compiledTextPre.focus(), 120);
+        }
+        function closeModal(){ modalOverlay.classList.remove('visible'); modalOverlay.setAttribute('aria-hidden', 'true'); setTimeout(()=>{ compiledTextPre.innerHTML=''; searchInput.value=''; },300); }
+
+        modalOverlay.addEventListener('click', (e)=>{ if (e.target === modalOverlay) closeModal(); });
+        closeModalButton.addEventListener('click', closeModal);
+
+        // --- Read file helper ---
+        function readFileContent(file){
+            return new Promise((resolve,reject)=>{
+                const reader = new FileReader();
+                reader.onload = (ev) => resolve(ev.target.result);
+                reader.onerror = (ev) => reject(reader.error || new Error('Read error'));
+                reader.readAsText(file);
+            });
+        }
+
+        // --- Compile logic ---
+        async function compileFiles(showModal=true){
+            if (!selectedFiles || selectedFiles.length === 0){ updateStatus('Please select files first.', 'info'); return; }
+            updateStatus('Reading and compiling files...', 'info');
+            compileButton.disabled = true; smallCompileButton.disabled = true;
+
+            let compiled = '';
+            for (const file of selectedFiles){
+                try{
+                    const content = await readFileContent(file);
+                    compiled += `\n\n/* --- Start of file: ${file.name} --- */\n` + content + `\n/* --- End of file: ${file.name} --- */\n`;
+                } catch(err){
+                    console.error('Error reading file', file.name, err);
+                    updateStatus(`Error reading file ${file.name}: ${err.message||err}`, 'error');
+                    compileButton.disabled = false; smallCompileButton.disabled = false;
+                    return;
+                }
+            }
+
+            // Prepare download link for compiled file
+            const blob = new Blob([compiled], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            downloadLink.href = url;
+            downloadLink.download = 'compiled_output.txt';
+            downloadLink.classList.remove('hidden');
+
+            updateStatus('Files compiled successfully! You can view/copy/download the output.', 'success');
+            compileButton.disabled = false; smallCompileButton.disabled = false;
+
+            if (showModal) openModal(compiled);
+            return compiled;
+        }
+
+        compileButton.addEventListener('click', () => compileFiles(true));
+        smallCompileButton.addEventListener('click', () => compileFiles(true));
+
+        // --- Copy to clipboard ---
+        copyContentButton.addEventListener('click', async () => {
+            try{
+                await navigator.clipboard.writeText(compiledRawContent);
+                copyContentButton.textContent = 'Copied!';
+                setTimeout(()=> copyContentButton.textContent='Copy', 1800);
+            } catch(err){
+                alert('Copy failed — select and copy manually.');
+                console.error(err);
+            }
+        });
+
+        // --- Download compiled (from modal) ---
+        downloadCompiledBtn.addEventListener('click', () => {
+            if (!compiledRawContent) return alert('Nothing to download yet.');
+            const blob = new Blob([compiledRawContent], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a'); a.href = url; a.download = 'compiled_output.txt'; a.click(); URL.revokeObjectURL(url);
+        });
+
+        // --- Search inside compiled content ---
+        function escapeHtml(text){
+            if (!text) return '';
+            return text.replace(/[&<>"']/g, ch => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;' }[ch]));
+        }
+
+        function highlightTerm(raw, term){
+            if (!term) return escapeHtml(raw);
+            // Escape regex special characters in the search term
+            const esc = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const re = new RegExp('(' + esc + ')', 'gi');
+            return escapeHtml(raw).replace(re, '<mark>$1</mark>');
+        }
+
+        searchButton.addEventListener('click', () => {
+            const term = searchInput.value.trim();
+            if (!compiledRawContent) return;
+            compiledTextPre.innerHTML = highlightTerm(compiledRawContent, term);
+            if (term){
+                const first = compiledTextPre.querySelector('mark');
+                if (first) first.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+        });
+
+        clearSearch.addEventListener('click', () => { searchInput.value = ''; if (compiledRawContent) compiledTextPre.innerHTML = escapeHtml(compiledRawContent); });
+
+        searchInput.addEventListener('keydown', (e) => { if (e.key === 'Enter'){ e.preventDefault(); searchButton.click(); } });
+
+        // --- JSZip export ---
+        downloadZipButton.addEventListener('click', async () => {
+            if (!selectedFiles || selectedFiles.length === 0) return updateStatus('No files to zip.', 'info');
+            updateStatus('Preparing ZIP archive...', 'info');
+            const zip = new JSZip();
+
+            for (const file of selectedFiles){
+                try{
+                    const content = await readFileContent(file);
+                    zip.file(file.name, content);
+                } catch(err){ console.error('Error reading file for zip', file.name, err); }
+            }
+
+            if (!compiledRawContent) compiledRawContent = await compileFiles(false) || '';
+            zip.file('compiled_output.txt', compiledRawContent);
+
+            zip.generateAsync({ type: 'blob' }).then(blob => {
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a'); a.href = url; a.download = 'files_bundle.zip'; a.click(); URL.revokeObjectURL(url);
+                updateStatus('ZIP ready — downloaded.', 'success');
+            }).catch(err => {
+                console.error('JSZip error', err);
+                updateStatus('Failed to create ZIP.', 'error');
+            });
+        });
+
+        // --- Reverse split logic ---
+        // Parse compiled text and extract sections wrapped by the Start/End markers.
+        function reverseSplitCompiled(text){
+            const results = [];
+            if (!text) return results;
+
+            // Marker format used in compilation:
+            // /* --- Start of file: filename --- */
+            // <content>
+            // /* --- End of file: filename --- */
+
+            const startRegex = /\/\* --- Start of file: (.*?) --- \*\//g;
+            let match;
+            while ((match = startRegex.exec(text)) !== null){
+                const filename = match[1].trim();
+                const startIndex = match.index + match[0].length;
+                const endMarker = `/* --- End of file: ${filename} --- */`;
+                const endIndex = text.indexOf(endMarker, startIndex);
+                if (endIndex === -1){
+                    // Couldn't find end marker for this filename — try to find next start or treat rest as content
+                    console.warn('End marker not found for', filename);
+                    // find next start position
+                    const nextStartPos = text.indexOf('/* --- Start of file:', startIndex);
+                    const content = (nextStartPos === -1) ? text.slice(startIndex).trim() : text.slice(startIndex, nextStartPos).trim();
+                    results.push({ filename: filename || `extracted_${results.length+1}.txt`, content });
+                    if (nextStartPos === -1) break;
+                    // reset regex position to nextStartPos
+                    startRegex.lastIndex = nextStartPos;
+                    continue;
+                }
+                const content = text.slice(startIndex, endIndex).trim();
+                results.push({ filename: filename || `extracted_${results.length+1}.txt`, content });
+
+                // Move regex pointer beyond the end marker for next iteration
+                startRegex.lastIndex = endIndex + endMarker.length;
+            }
+
+            return results;
+        }
+
+        // Handle compiled file upload for splitting
+        compiledFileInput.addEventListener('change', async (e) => {
+            const f = e.target.files && e.target.files[0];
+            if (!f) return;
+            try{
+                const txt = await readFileContent(f);
+                // perform split
+                const parts = reverseSplitCompiled(txt);
+                displayExtracted(parts);
+            } catch(err){
+                console.error('Error reading compiled file', err);
+                updateStatus('Failed to read compiled file.', 'error');
+            }
+        });
+
+        splitButton.addEventListener('click', async () => {
+            const f = compiledFileInput.files && compiledFileInput.files[0];
+            if (!f) return updateStatus('Select a compiled file first.', 'info');
+            try{
+                updateStatus('Reading compiled file...', 'info');
+                const txt = await readFileContent(f);
+                const parts = reverseSplitCompiled(txt);
+                if (!parts || parts.length === 0) return updateStatus('No embedded files found in compiled file.', 'error');
+                displayExtracted(parts);
+                updateStatus(`Extracted ${parts.length} file(s).`, 'success');
+            } catch(err){
+                console.error(err);
+                updateStatus('Failed to process compiled file.', 'error');
+            }
+        });
+
+        function displayExtracted(parts){
+            lastExtracted = parts;
+            extractedList.innerHTML = '';
+            if (!parts || parts.length === 0){
+                extractedFilesContainer.classList.add('hidden');
+                return;
+            }
+            extractedFilesContainer.classList.remove('hidden');
+
+            parts.forEach((p, idx) => {
+                const row = document.createElement('div');
+                row.style.display = 'flex'; row.style.justifyContent = 'space-between'; row.style.alignItems = 'center'; row.style.padding = '8px 0'; row.style.borderBottom = '1px dashed #eee';
+                const left = document.createElement('div');
+                const name = document.createElement('div'); name.className = 'file-name'; name.textContent = p.filename;
+                const size = document.createElement('div'); size.className = 'file-size'; size.textContent = `(${(p.content.length/1024).toFixed(2)} KB)`;
+                left.appendChild(name); left.appendChild(size);
+                row.appendChild(left);
+
+                const right = document.createElement('div');
+                const viewBtn = document.createElement('button'); viewBtn.textContent = 'View'; viewBtn.className = 'px-2 py-1 text-sm bg-blue-500 text-white rounded';
+                viewBtn.addEventListener('click', () => { openModal(p.content); });
+                const dlBtn = document.createElement('button'); dlBtn.textContent = 'Download'; dlBtn.className = 'px-2 py-1 text-sm bg-green-600 text-white rounded ml-2';
+                dlBtn.addEventListener('click', () => downloadExtractedFile(p.filename, p.content));
+                right.appendChild(viewBtn); right.appendChild(dlBtn);
+
+                row.appendChild(right);
+                extractedList.appendChild(row);
+            });
+
+            downloadExtractedZip.classList.remove('hidden');
+        }
+
+        function downloadExtractedFile(filename, content){
+            const blob = new Blob([content], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a'); a.href = url; a.download = filename; a.click(); URL.revokeObjectURL(url);
+        }
+
+        downloadExtractedZip.addEventListener('click', async () => {
+            if (!lastExtracted || lastExtracted.length === 0) return updateStatus('No extracted files to zip.', 'info');
+            updateStatus('Preparing ZIP of extracted files...', 'info');
+            const zip = new JSZip();
+            lastExtracted.forEach(p => zip.file(p.filename, p.content));
+            zip.generateAsync({ type: 'blob' }).then(blob => {
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a'); a.href = url; a.download = 'extracted_files.zip'; a.click(); URL.revokeObjectURL(url);
+                updateStatus('Extracted ZIP downloaded.', 'success');
+            }).catch(err => { console.error(err); updateStatus('Failed to create extracted ZIP.', 'error'); });
+        });
+
+        // --- Initialize ---
+        resetStatus(); displayFiles();
+    </script>
+</body>
+</html>
